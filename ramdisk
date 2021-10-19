@@ -1,0 +1,59 @@
+#!/bin/bash
+
+RAMDISK_PATH=${RAMDISK_PATH:-/tmp/ramdisk}
+
+function show_help() {
+    echo "Usage:"
+    printf "    %-30s %s\n" \
+         "ramdisk 4G" "create a ramdisk with specified size" \
+         "ramdisk umount" "unmount the ramdisk" \
+         "ramdisk status [-q|--quiet]" "show ramdisk status. If mounted, returns 0" \
+         "ramdisk path" "show ramdisk path (even if not mounted)"
+}
+
+if [ -z "$1" ]; then
+    show_help
+    exit 1
+fi
+
+shopt -s extglob
+
+case "$1" in
+    -h|--help)
+        show_help
+        exit 0
+        ;;
+    status)
+        QUIET=
+        if [[ ${2+$2} =~ ^-q|--quiet$ ]]; then
+            QUIET=1
+        fi
+        if [[ -d "$RAMDISK_PATH" ]]; then
+            [ -z "$QUIET" ] && echo "Mounted at $RAMDISK_PATH"
+            exit 0
+        fi
+        [ -z "$QUIET" ] && echo "Not mounted"
+        exit 1
+        ;;
+    path)
+        exec echo "$RAMDISK_PATH"
+        ;;
+    umount)
+        if [[ ! -d "$RAMDISK_PATH" ]]; then
+            echo "Ramdisk is already unmounted!"
+            exit 0
+        fi
+        exec sudo -p "[sudo] Enter password for %u to unmount ramdisk: " bash -c "umount \"$RAMDISK_PATH\" && rm -rf \"$RAMDISK_PATH\" && echo \"Unmounted $RAMDISK_PATH\""
+        ;;
+        +([0-9])*)
+        if [[ -d "$RAMDISK_PATH" ]]; then
+            echo "Already mounted at $RAMDISK_PATH!"
+            exit 0
+        fi
+        exec sudo "[sudo] Enter password for %u to mount ramdisk: " bash -c "mkdir -p \"$RAMDISK_PATH\" && mount -t tmpfs -o rw,size=$1 tmpfs \"$RAMDISK_PATH\" && echo \"Ramdisk mounted at $RAMDISK_PATH\""
+        ;;
+        *)
+        echo "Unknown option"
+        exit 1
+        ;;
+esac
