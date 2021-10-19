@@ -1,0 +1,163 @@
+#!/bin/bash
+
+set -eu
+
+RUNNER_NAME=${RUNNER_NAME:-local-1}
+USE_DIND_CACHE=${USE_DIND_CACHE:-0}
+
+IMAGE=gitlab/gitlab-runner:alpine
+CONFIG_DIR="$HOME/.local/etc/gitlab-runner/$RUNNER_NAME/"
+DOCKER_CONFIG_FILE="$HOME/.docker/config.json"
+# NOTE dind with shared cache may be unstable.
+export DOCKER_HOST=${DOCKER_HOST:-$XDG_RUNTIME_DIR/docker.sock}
+
+
+# NOTE gitlab-runner sometimes may leave dangling volumes
+#https://gitlab.com/gitlab-org/gitlab-runner/-/issues/1611 - related?
+# Consider running "docker volume prune" periodically
+
+
+# -------------------- utils --------------------
+
+
+function add_prune_filter () {
+    local filter_str="\"label!=$PERSISTENT_LABEL\""
+    function create_config () {
+        printf "%s\n" \
+        "{" \
+        "    \"pruneFilters\": [$filter_str]" \
+        "}" > "$1"
+    }
+
+    # create config if it doesn't exist (in this case we don't need jq)
+    if [ ! -f "$DOCKER_CONFIG_FILE" ]; then
+        create_config "$DOCKER_CONFIG_FILE"
+        [ ${QUIET:+x} ] || echo "OK: Added prune filter"
+        return
+    fi
+    # check if the filter already exists
+    grep -q "$filter_str" "$DOCKER_CONFIG_FILE" && { [ ${QUIET:+x} ] || echo "OK: The filter already exists"; return; }
+
+    local new_config_file="$DOCKER_CONFIG_FILE.new"
+    if ! command -v jq &> /dev/null; then
+        create_config "$new_config_file"
+        >&2 printf "%s\n" \
+        "WARNING: jq is not installed, cannot add prune filter for volumes." \
+        "         To add the filter, install jq, then run \"$0 protect-volumes\"" \
+        "         To add the filter manually, merge \"$new_config_file\" into \"$DOCKER_CONFIG_FILE\""
+        return
+    fi
+    rm -f "$new_config_file"
+    # -s and first "if" are needed to process empty files
+    local new_config=$(jq -s "if . == [] then {} else .[] end | .pruneFilters |= if .|index($filter_str)|not then . + [$filter_str] else . end" \
+                              "$DOCKER_CONFIG_FILE")
+    # backup and update config
+    cp "$DOCKER_CONFIG_FILE" "$DOCKER_CONFIG_FILE.bak"
+    echo "$new_config" > "$DOCKER_CONFIG_FILE"
+    [ ${QUIET:+x} ] || echo "OK: Added prune filter"
+}
+
+
+# -------------------- entrypoint --------------------
+
+
+if [ -z ${1+$1} ]; then
+    echo "Command is not specified"
+    exit
+fi
+
+
+# -------------------- runner commands --------------------
+
+
+CONTAINER_NAME="gitlab-runner-$RUNNER_NAME"
+
+DIND_CACHE_VOLUME="$RUNNER_NAME-dind-cache"
+PERSISTENT_LABEL=runner-persistent-volume
+
+CERTDIR="/certs/"
+CLIENT_CERTDIR="$CERTDIR/client/"
+
+CONFIG_MOUNT="$CONFIG_DIR:/etc/gitlab-runner"
+SOCKET_MOUNT="${DOCKER_HOST#unix://}:/var/run/docker.sock"
+# actually mounted into all service and job containers.
+# Any issues with concurrent job execution?
+DIND_CACHE_MOUNT="$DIND_CACHE_VOLUME:/var/lib/docker/"
+
+case "$1" in
+    protect-volumes)
+        add_prune_filter
+        ;;
+    register)
+        shift
+        if [ -z ${1+$1} ]; then
+            read -p "Enter the registration token: " token
+        else
+            token="$1"
+            shift
+        fi
+        runner_cfg=(
+            --non-interactive
+            --url "https://gitlab.com/"
+            --registration-token "$token"
+            --name "$RUNNER_NAME"
+            --run-untagged=true
+            --env "DOCKER_TLS_CERTDIR=$CERTDIR"
+            --env "DOCKER_CERT_PATH=$CLIENT_CERTDIR"
+            --env "DOCKER_HOST=tcp://docker:2376"
+            --env "DOCKER_TLS_VERIFY=1"
+            --executor docker
+            --docker-privileged=true
+            --docker-image ruby:2.5
+            --docker-volumes "$CERTDIR"
+        )
+        limit=0
+        if [ "$USE_DIND_CACHE" = "1" ]; then
+            limit=1
+            runner_cfg+=(--docker-volumes "$DIND_CACHE_MOUNT")
+        fi
+        runner_cfg+=(
+            --limit $limit
+            "$@"
+        )
+
+        docker run --rm -it -v "$CONFIG_MOUNT" $IMAGE register \
+        "${runner_cfg[@]}"
+        ;;
+    unregister)
+        docker run --rm -it -v "$CONFIG_MOUNT" $IMAGE unregister \
+            --url "https://gitlab.com/" \
+            --name "$RUNNER_NAME"
+        ;;
+    restart | stop | start)
+        docker $1 "$CONTAINER_NAME"
+        ;;
+    logs)
+        docker logs -f "$CONTAINER_NAME"
+        ;;
+    run)
+        QUIET=1 add_prune_filter
+        # TODO run registry mirror? (only dockerhub?)
+        # TODO clean cache periodically
+        if [ "$USE_DIND_CACHE" = "1" ]; then
+            docker volume create --label "$PERSISTENT_LABEL" "$DIND_CACHE_VOLUME"
+        fi
+        docker run -d --name "$CONTAINER_NAME" --restart always \
+            -v "$CONFIG_MOUNT" -v "$SOCKET_MOUNT" \
+            $IMAGE
+        ;;
+    rm)
+        docker rm -f "$CONTAINER_NAME"
+        if [ "$USE_DIND_CACHE" = "1" ]; then
+            docker volume rm "$DIND_CACHE_VOLUME"
+        fi
+        ;;
+    --)
+        shift
+        docker "$@"
+        # add exec?
+        ;;
+    *)
+        echo "Unknown command"
+        ;;
+esac

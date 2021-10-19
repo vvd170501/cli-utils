@@ -1,0 +1,92 @@
+#!/bin/bash
+
+set -eu
+
+RUNNER_NAME=${RUNNER_NAME:-local-1}
+RAMDISK_SIZE=${RAMDISK_SIZE:-16G}
+
+
+# -------------------- dockerd utils --------------------
+
+
+name="gl-runner-$RUNNER_NAME"
+base="$(ramdisk path)/docker-$name"
+socket="$base.socket"
+host="unix://$socket"
+service="docker-$name.service"
+export DOCKER_HOST="$host"
+
+
+function clone_dockerd() {
+    orig_file=$(systemctl --user show -p FragmentPath docker.service | cut -d = -f 2)
+    service_file="${orig_file%.service}-$name.service"
+    if [[ -f $service_file ]]; then
+        return
+    fi
+    echo "Cloning docker service..."
+    sed "s^\(ExecStart=.*\.sh\)^\1 --data-root \"$base.data\" --exec-root \"$base.exec\" --host \"$host\" --pidfile \"$base.pid\"^g" "$orig_file" > "$service_file"
+    systemctl --user daemon-reload
+}
+
+function start_dockerd() {
+    echo "Starting docker service..."
+    systemctl --user start "$service"
+    echo "Started!"
+}
+
+function stop_dockerd() {
+    echo "Stopping docker service..."
+    systemctl --user stop "$service"
+    echo "Stopped!"
+}
+
+function del_dockerd_clone() {
+    service_file=$(systemctl show -p FragmentPath "$service" | cut -d = -f 2)
+    if [[ ! -f $service_file ]]; then
+        return
+    fi
+    rm "$service_file"
+    systemctl --user daemon-reload
+}
+
+
+# -------------------- entrypoint --------------------
+
+
+if [ -z ${1+$1} ]; then
+    echo "Command is not specified"
+    exit
+fi
+
+
+# -------------------- system commands --------------------
+
+
+case "$1" in
+    setup)
+        echo "Mounting ramdisk..."
+        ramdisk $RAMDISK_SIZE
+        clone_dockerd
+        start_dockerd
+        exit
+        ;;
+    status)
+        exec systemctl --user status "$service"
+        ;;
+    clean)
+        ramdisk status -q || { echo "Ramdisk is not mounted!"; exit 1; }
+        docker stop gitlab-runner 2>/dev/null || true
+        stop_dockerd
+        del_dockerd_clone
+        echo "Unmounting ramdisk..."
+        ramdisk umount
+        exit
+        ;;
+esac
+
+
+# -------------------- runner commands --------------------
+
+ramdisk status -q || { echo "Ramdisk is not mounted!"; exit 1; }
+
+exec gitlab-runner "$@"
