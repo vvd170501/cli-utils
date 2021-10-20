@@ -61,6 +61,7 @@ function add_prune_filter () {
 # -------------------- entrypoint --------------------
 
 
+# TODO add help
 if [ -z ${1+$1} ]; then
     echo "Command is not specified"
     exit
@@ -87,6 +88,24 @@ DIND_CACHE_MOUNT="$DIND_CACHE_VOLUME:/var/lib/docker/"
 case "$1" in
     protect-volumes)
         add_prune_filter
+        ;;
+    clear-dind-cache)
+        if [ "$USE_DIND_CACHE" != "1" ]; then
+            echo "DinD cache is not used"
+            exit
+        fi
+        echo "Stopping the runner..."
+        "$0" stop
+        # NOTE what if jobs used a different version of dind? will this work?
+        shift
+        args="$@"  # Additional args for prune, e.g. --force or --filter
+        dind_cleaner="dind-cleaner-$RUNNER_NAME"
+        echo "Starting DinD..."
+        docker run --rm -d -v "$DIND_CACHE_MOUNT" --name "$dind_cleaner" --privileged docker:dind
+        docker exec -it "$dind_cleaner" sh -c "while ( ! docker ps -q 2>/dev/null ); do sleep 1; done; docker system prune -a --volumes $args"
+        docker stop "$dind_cleaner"
+        echo "Starting the runner..."
+        "$0" start
         ;;
     register)
         shift
@@ -129,17 +148,22 @@ case "$1" in
             --url "https://gitlab.com/" \
             --name "$RUNNER_NAME"
         ;;
-    restart | stop | start)
+    start)
         docker $1 "$CONTAINER_NAME"
+        ;;
+    stop | restart)
+        # if runner is killed (on timeout), it will leave dangling containers and volumes
+        timeout=${2:-900}
+        docker $1 -t "$timeout" "$CONTAINER_NAME"
         ;;
     logs)
         docker logs -f "$CONTAINER_NAME"
         ;;
     run)
-        QUIET=1 add_prune_filter
+        # TODO don't output container/volume names
         # TODO run registry mirror? (only dockerhub?)
-        # TODO clean cache periodically
         if [ "$USE_DIND_CACHE" = "1" ]; then
+            QUIET=1 add_prune_filter
             docker volume create --label "$PERSISTENT_LABEL" "$DIND_CACHE_VOLUME"
         fi
         docker run -d --name "$CONTAINER_NAME" --restart always \
@@ -147,7 +171,7 @@ case "$1" in
             $IMAGE
         ;;
     rm)
-        docker rm -f "$CONTAINER_NAME"
+        docker rm "$CONTAINER_NAME"
         if [ "$USE_DIND_CACHE" = "1" ]; then
             docker volume rm "$DIND_CACHE_VOLUME"
         fi

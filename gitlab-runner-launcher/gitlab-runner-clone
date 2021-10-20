@@ -3,7 +3,7 @@
 set -eu
 
 RUNNER_NAME=${RUNNER_NAME:-local-1}
-RAMDISK_SIZE=${RAMDISK_SIZE:-16G}
+RAMDISK_SIZE=${RAMDISK_SIZE:-50%}
 
 
 # -------------------- dockerd utils --------------------
