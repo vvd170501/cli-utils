@@ -2,22 +2,64 @@
 
 set -eu
 
-RUNNER_NAME=${RUNNER_NAME:-local-1}
-USE_DIND_CACHE=${USE_DIND_CACHE:-0}
-
+# Usually you don't need to change these vars
 IMAGE=gitlab/gitlab-runner:alpine
-CONFIG_DIR="$HOME/.local/etc/gitlab-runner/$RUNNER_NAME/"
 DOCKER_CONFIG_FILE="$HOME/.docker/config.json"
-# NOTE dind with shared cache may be unstable.
-export DOCKER_HOST=${DOCKER_HOST:-$XDG_RUNTIME_DIR/docker.sock}
+STOP_TIMEOUT=900
 
 
 # NOTE gitlab-runner sometimes may leave dangling volumes
 #https://gitlab.com/gitlab-org/gitlab-runner/-/issues/1611 - related?
 # Consider running "docker volume prune" periodically
 
+DEFAULT_RUNNER_NAME=local-1
+RUNNER_NAME=${RUNNER_NAME:-$DEFAULT_RUNNER_NAME}
+DEFAULT_CONFIG_PARENT="$HOME/.local/etc/gitlab-runner"
+RUNNER_CONFIG_DIR=${RUNNER_CONFIG_DIR:-$DEFAULT_CONFIG_PARENT/$RUNNER_NAME/}
+# NOTE dind with shared cache may be unstable.
+USE_DIND_CACHE=${USE_DIND_CACHE:-0}
+export DOCKER_HOST=${DOCKER_HOST:-unix://$XDG_RUNTIME_DIR/docker.sock}
 
 # -------------------- utils --------------------
+
+
+function show_help() {
+    echo "Usage: gitlab-runner CMD [OPTIONS]"
+    printf "  %s\n" \
+        "This is a wrapper script for gitlab-runner." \
+        "Quick start:" \
+        "  $ export USE_DIND_CACHE=1  # experimental, use to speed up building and running containers" \
+        "  $ gitlab-runner register \$TOKEN" \
+        "  $ gitlab-runner run" \
+        ""
+    echo "Environment variables:"
+    printf "    %-28s %s\n" \
+        "RUNNER_NAME" "The name of the runner (default \"$DEFAULT_RUNNER_NAME\")." \
+        "RUNNER_CONFIG_DIR" "The directory which will be used to store runner config." \
+        "" "Default \"$DEFAULT_CONFIG_PARENT/\$RUNNER_NAME/\"" \
+        "USE_DIND_CACHE" "Use a docker volume to store DinD cache (default 0)." \
+        "" "NOTE if DinD cache is enabled, the runner will execute at most one job concurrently." \
+        "" "     If different DinD versions are used by the same runner, builds may (or may not) fail." \
+        "DOCKER_HOST" "Address of the docker daemon. Usually it is already configured." \
+        ""
+    echo "Available commands:"
+    printf "    %-28s %s\n" \
+        "register [TOKEN] [OPTIONS]" "Register the runner. To show available options, run with \"--help\"" \
+        "unregister" "Unregister the runner." \
+        "" "" \
+        "run" "Create and start the runner. Also create DinD cache, if needed." \
+        "start" "Start the runner." \
+        "stop [-t TIMEOUT]" "Stop the runner.  Default timeout is ${STOP_TIMEOUT}s" \
+        "restart [-t TIMEOUT]" "Restart the runner. Default timeout is ${STOP_TIMEOUT}s" \
+        "rm" "Delete the runner and DinD cache (if used)." \
+        "logs" "Show runner logs" \
+        "" "" \
+        "clear-dind-cache [OPTIONS]" "Remove all images, volumes, etc. from DinD cache (if it is used)." \
+        "" "You can pass additional OPTIONS (see \"docker system prune\" for option list)" \
+        "protect-volumes" "Add a docker prune filter to protect persistent runner volumes." \
+        "" "You don't need to run this command, unless you were prompted to do so by \"gitlab-runner run\"." \
+        "-- DOCKER_COMMAND [OPTIONS]" "Run a docker command."
+}
 
 
 function add_prune_filter () {
@@ -61,10 +103,9 @@ function add_prune_filter () {
 # -------------------- entrypoint --------------------
 
 
-# TODO add help
 if [ -z ${1+$1} ]; then
-    echo "Command is not specified"
-    exit
+    show_help
+    exit 1
 fi
 
 
@@ -76,6 +117,7 @@ CONTAINER_NAME="gitlab-runner-$RUNNER_NAME"
 DIND_CACHE_VOLUME="$RUNNER_NAME-dind-cache"
 PERSISTENT_LABEL=runner-persistent-volume
 
+CONFIG_DIR="$RUNNER_CONFIG_DIR"
 CERTDIR="/certs/"
 CLIENT_CERTDIR="$CERTDIR/client/"
 
@@ -86,11 +128,15 @@ SOCKET_MOUNT="${DOCKER_HOST#unix://}:/var/run/docker.sock"
 DIND_CACHE_MOUNT="$DIND_CACHE_VOLUME:/var/lib/docker/"
 
 case "$1" in
+    --help|-h)
+        show_help
+        exit 0
+        ;;
     protect-volumes)
         add_prune_filter
         ;;
     clear-dind-cache)
-        if [ "$USE_DIND_CACHE" != "1" ]; then
+        if [ "$USE_DIND_CACHE" = 0 ]; then
             echo "DinD cache is not used"
             exit
         fi
@@ -131,7 +177,7 @@ case "$1" in
             --docker-volumes "$CERTDIR"
         )
         limit=0
-        if [ "$USE_DIND_CACHE" = "1" ]; then
+        if [ "$USE_DIND_CACHE" != 0 ]; then
             limit=1
             # NOTE It's possible to use an anonymous volume for the cache
             #      but it may get accidentally pruned or deleted by the runner
@@ -141,6 +187,9 @@ case "$1" in
             --limit $limit
             "$@"
         )
+        if [[ "$token" =~ ^--help|-h$ ]]; then
+            runner_cfg=("--help")
+        fi
 
         docker run --rm -it -v "$CONFIG_MOUNT" $IMAGE register \
         "${runner_cfg[@]}"
@@ -155,7 +204,7 @@ case "$1" in
         ;;
     stop | restart)
         # if runner is killed (on timeout), it will leave dangling containers and volumes
-        timeout=${2:-900}
+        timeout=${2:$STOP_TIMEOUT}
         docker $1 -t "$timeout" "$CONTAINER_NAME"
         ;;
     logs)
@@ -163,7 +212,7 @@ case "$1" in
         ;;
     run)
         # TODO run registry mirror? (only dockerhub?)
-        if [ "$USE_DIND_CACHE" = "1" ]; then
+        if [ "$USE_DIND_CACHE" != 0 ]; then
             QUIET=1 add_prune_filter
             docker volume create --label "$PERSISTENT_LABEL" "$DIND_CACHE_VOLUME" > /dev/null
         fi
@@ -173,7 +222,7 @@ case "$1" in
         ;;
     rm)
         docker rm "$CONTAINER_NAME"
-        if [ "$USE_DIND_CACHE" = "1" ]; then
+        if [ "$USE_DIND_CACHE" != 0 ]; then
             docker volume rm "$DIND_CACHE_VOLUME" > /dev/null
         fi
         ;;
