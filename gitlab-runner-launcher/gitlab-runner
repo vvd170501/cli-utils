@@ -101,9 +101,9 @@ case "$1" in
         args="$@"  # Additional args for prune, e.g. --force or --filter
         dind_cleaner="dind-cleaner-$RUNNER_NAME"
         echo "Starting DinD..."
-        docker run --rm -d -v "$DIND_CACHE_MOUNT" --name "$dind_cleaner" --privileged docker:dind
+        docker run --rm -d -v "$DIND_CACHE_MOUNT" --name "$dind_cleaner" --privileged docker:dind > /dev/null
         docker exec -it "$dind_cleaner" sh -c "while ( ! docker ps -q 2>/dev/null ); do sleep 1; done; docker system prune -a --volumes $args"
-        docker stop "$dind_cleaner"
+        docker stop "$dind_cleaner" > /dev/null
         echo "Starting the runner..."
         "$0" start
         ;;
@@ -133,6 +133,8 @@ case "$1" in
         limit=0
         if [ "$USE_DIND_CACHE" = "1" ]; then
             limit=1
+            # NOTE It's possible to use an anonymous volume for the cache
+            #      but it may get accidentally pruned or deleted by the runner
             runner_cfg+=(--docker-volumes "$DIND_CACHE_MOUNT")
         fi
         runner_cfg+=(
@@ -160,11 +162,10 @@ case "$1" in
         docker logs -f "$CONTAINER_NAME"
         ;;
     run)
-        # TODO don't output container/volume names
         # TODO run registry mirror? (only dockerhub?)
         if [ "$USE_DIND_CACHE" = "1" ]; then
             QUIET=1 add_prune_filter
-            docker volume create --label "$PERSISTENT_LABEL" "$DIND_CACHE_VOLUME"
+            docker volume create --label "$PERSISTENT_LABEL" "$DIND_CACHE_VOLUME" > /dev/null
         fi
         docker run -d --name "$CONTAINER_NAME" --restart always \
             -v "$CONFIG_MOUNT" -v "$SOCKET_MOUNT" \
@@ -173,7 +174,7 @@ case "$1" in
     rm)
         docker rm "$CONTAINER_NAME"
         if [ "$USE_DIND_CACHE" = "1" ]; then
-            docker volume rm "$DIND_CACHE_VOLUME"
+            docker volume rm "$DIND_CACHE_VOLUME" > /dev/null
         fi
         ;;
     --)
