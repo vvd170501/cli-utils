@@ -7,7 +7,6 @@ IMAGE=gitlab/gitlab-runner:alpine
 DOCKER_CONFIG_FILE="$HOME/.docker/config.json"
 STOP_TIMEOUT=900
 
-
 # NOTE gitlab-runner sometimes may leave dangling volumes
 #https://gitlab.com/gitlab-org/gitlab-runner/-/issues/1611 - related?
 # Consider running "docker volume prune" periodically
@@ -40,6 +39,8 @@ function show_help() {
         "USE_DIND_CACHE" "Use a docker volume to store DinD cache (default 0)." \
         "" "NOTE if DinD cache is enabled, the runner will execute at most one job concurrently." \
         "" "     If different DinD versions are used by the same runner, builds may (or may not) fail." \
+        "" "     Also, if DinD is used for running containers, they will not be removed automatically." \
+        "" "     You can run \"dind-prune\" (see below) to reduce cache size." \
         "DOCKER_HOST" "Address of the docker daemon. Usually it is already configured." \
         ""
     echo "Available commands:"
@@ -54,8 +55,9 @@ function show_help() {
         "rm" "Delete the runner and DinD cache (if used)." \
         "logs" "Show runner logs" \
         "" "" \
-        "clear-dind-cache [OPTIONS]" "Remove all images, volumes, etc. from DinD cache (if it is used)." \
-        "" "You can pass additional OPTIONS (see \"docker system prune\" for option list)" \
+        "dind-prune [OPTIONS]" "Run a DinD instance and exec \"docker system prune\" inside." \
+        "" "You can pass additional OPTIONS for the command." \
+        "" "While this command is executed, the runner will be paused." \
         "dind-shell" "Run a shell to manually manage DinD. The runner will be temporarily stopped." \
         "protect-volumes" "Add a docker prune filter to protect persistent runner volumes." \
         "" "You don't need to run this command, unless you were prompted to do so by \"gitlab-runner run\"." \
@@ -136,7 +138,7 @@ case "$1" in
     protect-volumes)
         add_prune_filter
         ;;
-    clear-dind-cache|dind-shell)
+    dind-prune|dind-shell)
         if [ "$USE_DIND_CACHE" = 0 ]; then
             echo "DinD cache is not used"
             exit
@@ -147,10 +149,10 @@ case "$1" in
         echo "Starting DinD..."
         dind_container="dind-tmp-$RUNNER_NAME"
         docker run --rm -d -v "$DIND_CACHE_MOUNT" --name "$dind_container" --privileged docker:dind > /dev/null
-        if [ "$1" = clear-dind-cache ]; then
-            args="$@"  # Additional args for prune, e.g. --force or --filter
+        if [ "$1" = "dind-prune" ]; then
             shift
-            docker exec -it "$dind_container" sh -c "while ( ! docker ps -q 2>/dev/null ); do sleep 1; done; docker system prune -a --volumes $args"
+            args="$@"  # Additional args for prune, e.g. --force or --filter
+            docker exec -it "$dind_container" sh -c "while ( ! docker ps -q 2>/dev/null ); do sleep 1; done; docker system prune $args"
         else
             docker exec -it "$dind_container" sh -c "while ( ! docker ps -q 2>/dev/null ); do sleep 1; done; sh"
         fi
