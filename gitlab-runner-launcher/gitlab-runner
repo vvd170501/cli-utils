@@ -50,8 +50,8 @@ function show_help() {
         "" "" \
         "run" "Create and start the runner. Also create DinD cache, if needed." \
         "start" "Start the runner." \
-        "stop [-t TIMEOUT]" "Stop the runner.  Default timeout is ${STOP_TIMEOUT}s" \
-        "restart [-t TIMEOUT]" "Restart the runner. Default timeout is ${STOP_TIMEOUT}s" \
+        "stop [TIMEOUT]" "Stop the runner.  Default timeout is ${STOP_TIMEOUT}s" \
+        "restart [TIMEOUT]" "Restart the runner. Default timeout is ${STOP_TIMEOUT}s" \
         "rm" "Delete the runner and DinD cache (if used)." \
         "logs" "Show runner logs" \
         "" "" \
