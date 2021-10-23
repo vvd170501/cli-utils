@@ -174,6 +174,7 @@ case "$1" in
             --registration-token "$token"
             --name "$RUNNER_NAME"
             --run-untagged=true
+            --locked=false
             --env "DOCKER_TLS_CERTDIR=$CERTDIR"
             --env "DOCKER_CERT_PATH=$CLIENT_CERTDIR"
             --env "DOCKER_HOST=tcp://docker:2376"
@@ -188,7 +189,11 @@ case "$1" in
             limit=1
             # NOTE It's possible to use an anonymous volume for the cache
             #      but it may get accidentally pruned or deleted by the runner
-            runner_cfg+=(--docker-volumes "$DIND_CACHE_MOUNT")
+            # NOTE If custom tag list is supplied, "shared-dind" tag will not be included. TODO merge tag lists?
+            runner_cfg+=(
+                --docker-volumes "$DIND_CACHE_MOUNT"
+                --tag-list "shared-dind"
+            )
         fi
         runner_cfg+=(
             --limit $limit
