@@ -149,12 +149,13 @@ case "$1" in
         echo "Starting DinD..."
         dind_container="dind-tmp-$RUNNER_NAME"
         docker run --rm -d -v "$DIND_CACHE_MOUNT" --name "$dind_container" --privileged docker:dind > /dev/null
+        [ -t 0 ] && [ -t 1 ] && it_arg=-it || it_arg=  # to use dind commands from scripts
         if [ "$1" = "dind-prune" ]; then
             shift
             args="$@"  # Additional args for prune, e.g. --force or --filter
-            docker exec -it "$dind_container" sh -c "while ( ! docker ps -q 2>/dev/null ); do sleep 1; done; docker system prune $args"
+            docker exec $it_arg "$dind_container" sh -c "while ( ! docker ps -q 2>/dev/null ); do sleep 1; done; docker system prune $args"
         else
-            docker exec -it "$dind_container" sh -c "while ( ! docker ps -q 2>/dev/null ); do sleep 1; done; sh"
+            docker exec $it_arg "$dind_container" sh -c "while ( ! docker ps -q 2>/dev/null ); do sleep 1; done; sh"
         fi
         docker stop "$dind_container" > /dev/null
         echo "Starting the runner..."
