@@ -45,14 +45,14 @@ case "$1" in
         fi
         exec sudo -p "[sudo] Enter password for %u to unmount ramdisk: " bash -c "umount \"$RAMDISK_PATH\" && rm -rf \"$RAMDISK_PATH\" && echo \"Unmounted $RAMDISK_PATH\""
         ;;
-        +([0-9])*)
+    +([0-9])*)
         if [[ -d "$RAMDISK_PATH" ]]; then
             echo "Already mounted at $RAMDISK_PATH!"
             exit 0
         fi
         exec sudo "[sudo] Enter password for %u to mount ramdisk: " bash -c "mkdir -p \"$RAMDISK_PATH\" && mount -t tmpfs -o rw,size=$1 tmpfs \"$RAMDISK_PATH\" && echo \"Ramdisk mounted at $RAMDISK_PATH\""
         ;;
-        *)
+    *)
         echo "Unknown option"
         exit 1
         ;;
